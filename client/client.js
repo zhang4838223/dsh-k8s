@@ -4,14 +4,14 @@ window.__ModuleLoader__.load({
     var module = { exports: {} };
     var exports = module.exports;
     Object.defineProperty(exports, Symbol.toStringTag, { value: "Module" });
-//#region \0rolldown/runtime.js
+// \0rolldown/runtime.js
 var __create = Object.create;
 var __defProp = Object.defineProperty;
 var __getOwnPropDesc = Object.getOwnPropertyDescriptor;
 var __getOwnPropNames = Object.getOwnPropertyNames;
 var __getProtoOf = Object.getPrototypeOf;
 var __hasOwnProp = Object.prototype.hasOwnProperty;
-var __commonJSMin = (cb, mod) => () => (mod || (cb((mod = { exports: {} }).exports, mod), cb = null), mod.exports);
+var __commonJSMin = (cb, mod) => () => (mod || (cb((mod = { exports: {} }).exports, mod, mod.exports), cb = null), mod.exports);
 var __copyProps = (to, from, except, desc) => {
 	if (from && typeof from === "object" || typeof from === "function") for (var keys = __getOwnPropNames(from), i = 0, n = keys.length, key; i < n; i++) {
 		key = keys[i];
@@ -26,11 +26,9 @@ var __toESM = (mod, isNodeMode, target) => (target = mod != null ? __create(__ge
 	value: mod,
 	enumerable: true
 }) : target, mod));
-//#endregion
 let react = require("react");
 react = __toESM(react, 1);
-//#endregion
-//#region node_modules/@xterm/xterm/css/xterm.css
+// node_modules/@xterm/xterm/css/xterm.css
 var import_xterm = (/* @__PURE__ */ __commonJSMin(((exports, module) => {
 	(function(e, t) {
 		if ("object" == typeof exports && "object" == typeof module) module.exports = t();
@@ -13027,8 +13025,7 @@ var import_xterm = (/* @__PURE__ */ __commonJSMin(((exports, module) => {
 		})(), s;
 	})()));
 })))();
-//#endregion
-//#region src/client/resources.ts
+// src/client/resources.ts
 /** kubectl aligns fields at header offsets, including headers such as LAST SEEN. */
 function parseResourceTable(table, items) {
 	const lines = table.split(/\r?\n/).filter((line) => line.trim());
@@ -13062,8 +13059,7 @@ function statusTone(value) {
 	if (ready) return Number(ready[1]) === Number(ready[2]) ? "ok" : "warn";
 	return "neutral";
 }
-//#endregion
-//#region src/client/theme.ts
+// src/client/theme.ts
 /** 透明终端沿用页面背景，ANSI 状态色沿用宿主的语义色。 */
 function createTerminalTheme(colors) {
 	return {
@@ -13185,8 +13181,7 @@ function watchTerminalTheme(terminal, element) {
 		probe.remove();
 	};
 }
-//#endregion
-//#region src/client/index.tsx
+// src/client/index.tsx
 var import_addon_fit = (/* @__PURE__ */ __commonJSMin(((exports, module) => {
 	(function(e, t) {
 		"object" == typeof exports && "object" == typeof module ? module.exports = t() : "function" == typeof define && define.amd ? define([], t) : "object" == typeof exports ? exports.FitAddon = t() : e.FitAddon = t();
@@ -14312,7 +14307,6 @@ function apply(ctx) {
 		order: 10
 	}, () => react.createElement(K8sView)));
 }
-//#endregion
 exports.apply = apply;
 exports.inject = inject;
 

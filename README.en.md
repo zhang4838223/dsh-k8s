@@ -4,7 +4,7 @@
 
 A Kubernetes cluster manager for DeepSeek Harness (DSH). Manage your K8s clusters from a sidebar entry or conversation view, with a UI that follows the DSH theme.
 
-Current version: **0.2.0** · Verified host: **DSH 0.2.0-rc.2**.
+Current version: **0.2.1** · Verified host: **DSH 0.2.1-rc.3**.
 
 ## Features
 
@@ -19,9 +19,17 @@ Current version: **0.2.0** · Verified host: **DSH 0.2.0-rc.2**.
 
 ## Compatibility
 
-Plugin **0.2.0** targets **DSH 0.2.0-rc.2** (Web and Desktop). DSH prerelease APIs change frequently, so this release pins the verified host SDK version. Plugin 0.1.0 was based on `@deepseek-ai/dsh-settings ^0.1.0-rc.8` and is only suitable for older hosts that meet its dependency requirements.
+Plugin **0.2.1** targets **DSH 0.2.1-rc.3** (Web and Desktop). DSH prerelease APIs change frequently, so this release pins the verified host SDK version. Plugin 0.1.0 was based on `@deepseek-ai/dsh-settings ^0.1.0-rc.8` and is only suitable for older hosts that meet its dependency requirements.
 
-The 0.2 migration uses `dsh-client-ui-renderer` for client slots, `shell.execute()` for ordinary host commands, and DSH's `subprocess.spawnTerminal()` for interactive terminals. It no longer depends on the removed `dsh-client-runtime` or the unused `dsh-settings`.
+This release uses `dsh-client-ui-renderer` for client slots, `shell.execute()` for ordinary host commands, and DSH's `subprocess.spawnTerminal()` for interactive terminals. It no longer depends on the removed `dsh-client-runtime` or the unused `dsh-settings`.
+
+`engines.dsh` declares `>=0.2.1-rc.3 <0.3.0`. Before booting a profile, DSH 0.2.1-rc.3 validates each plugin against that field — falling back to the `@deepseek-ai/dsh-*` peer ranges when it is absent — and disables a plugin that does not satisfy it, printing the reason. Upgrading the host therefore requires upgrading this plugin too.
+
+### Changes in 0.2.1
+
+- Adapts to DSH **0.2.1-rc.3**: `engines.dsh` and every DSH peer range now accept that runtime
+- Depends on `@deepseek-ai/cordis` 4.0.5 and `dsh-client-ui-renderer` 0.2.1-rc.3
+- The compatibility test now reproduces the host's pre-boot validation of `engines.dsh` and the peer ranges, so the manifest can no longer pin a single prerelease by accident
 
 ### Changes in 0.2.0
 
@@ -35,7 +43,7 @@ The 0.2 migration uses `dsh-client-ui-renderer` for client slots, `shell.execute
 
 ### Prerequisites
 
-- DSH **0.2.0-rc.2**
+- DSH **0.2.1-rc.3**
 - `kubectl` installed locally and accessible on `PATH` to the user running DSH
 - A valid kubeconfig and Kubernetes permissions to view the target resources
 - Node.js **24 or later** and npm when building from source
@@ -57,7 +65,7 @@ Desktop manages its own `desktop` profile. The npm CLI in your terminal may use 
 
 ### Web: Install directly from GitHub
 
-Ensure the `dsh` CLI itself uses a compatible 0.2.0-rc.2 runtime, then install:
+Ensure the `dsh` CLI itself uses a compatible 0.2.1-rc.3 runtime, then install:
 
 ```bash
 dsh plugin --profile web add github:MrYangyt/dsh-k8s
@@ -252,9 +260,19 @@ Install kubectl and make sure it is on your PATH.
 
 The plugin has not found any configs in `~/.kube/configs/`. Click **管理集群**, paste a valid kubeconfig YAML, and click **保存集群**. An existing main config is not imported automatically.
 
+### Adding a cluster fails with operation not permitted
+
+If saving a cluster fails with `rename-context failed: error: open ~/.kube/configs/<name>.yaml.lock: operation not permitted`, the DSH file sandbox confined `kubectl` to the session workspace, so it cannot create its lock files and cache under `~/.kube`.
+
+The plugin passes a `sandboxPolicy` through `shell.execute()` that names `~/.kube` as the writable root for `kubectl`; the grant covers that tree only. Earlier versions made no such request and failed as above. Update to the current version and restart DSH.
+
+The host loads plugin code at startup, so **restart DeepSeek Harness** after updating; refreshing the page does not reload the host half.
+
 ### Installation reports incompatibility with DSH
 
-This release requires the shell, subprocess, and webserver SDKs from DSH 0.2.0-rc.2. If the error still mentions `dsh-k8s-manager@0.1.0` or requires `@deepseek-ai/dsh-settings ^0.1.0-rc.8`, an older version is being loaded. Update the project, rebuild, reinstall the project directory, and restart DSH.
+This release requires the shell, subprocess, and webserver SDKs from DSH 0.2.1-rc.3. If the error still mentions `dsh-k8s-manager@0.1.0` or requires `@deepseek-ai/dsh-settings ^0.1.0-rc.8`, an older version is being loaded. Update the project, rebuild, reinstall the project directory, and restart DSH.
+
+If startup logs `disabling profile plugin "k8s-manager"` together with `is incompatible with dsh …`, the plugin's `engines.dsh` or DSH peer range rejects the running runtime. Install the plugin release that matches the running DSH version; do not grant a cross-prerelease version exemption unless you accept that it risks crashes or data loss.
 
 ### Installation fails a minimumReleaseAge or supply-chain policy check
 

@@ -4,7 +4,7 @@
 
 一个用于 DeepSeek Harness (DSH) 的 Kubernetes 集群管理插件。通过侧栏入口或会话视图管理你的 K8s 集群，界面跟随 DSH 主题。
 
-当前版本：**0.2.0** · 已验证宿主：**DSH 0.2.0-rc.2**。
+当前版本：**0.2.1** · 已验证宿主：**DSH 0.2.1-rc.3**。
 
 ## 功能特性
 
@@ -19,9 +19,17 @@
 
 ## 版本兼容
 
-当前插件版本为 **0.2.0**，针对 **DSH 0.2.0-rc.2**（Web 和 Desktop）构建。DSH 预发布接口变化较快，本版明确锁定已验证的宿主版本。插件 0.1.0 基于 `@deepseek-ai/dsh-settings ^0.1.0-rc.8`，仅适用于满足其依赖要求的旧宿主。
+当前插件版本为 **0.2.1**，针对 **DSH 0.2.1-rc.3**（Web 和 Desktop）构建。DSH 预发布接口变化较快，本版明确锁定已验证的宿主版本。插件 0.1.0 基于 `@deepseek-ai/dsh-settings ^0.1.0-rc.8`，仅适用于满足其依赖要求的旧宿主。
 
-0.2 迁移使用 `dsh-client-ui-renderer` 提供客户端插槽，普通宿主命令使用 `shell.execute()`，交互式终端使用 DSH 的 `subprocess.spawnTerminal()`；不再依赖已移除的 `dsh-client-runtime` 或未使用的 `dsh-settings`。
+0.2.1 使用 `dsh-client-ui-renderer` 提供客户端插槽，普通宿主命令使用 `shell.execute()`，交互式终端使用 DSH 的 `subprocess.spawnTerminal()`；不再依赖已移除的 `dsh-client-runtime` 或未使用的 `dsh-settings`。
+
+`package.json` 的 `engines.dsh` 声明 `>=0.2.1-rc.3 <0.3.0`。DSH 0.2.1-rc.3 在 profile 启动前按该字段（缺省时回退到 `@deepseek-ai/dsh-*` peer 依赖范围）校验插件，不满足时会禁用该插件并打印原因；因此升级宿主后必须同时更新本插件。
+
+### 0.2.1 更新
+
+- 适配 DSH **0.2.1-rc.3**：`engines.dsh` 与全部 DSH peer 依赖改为兼容该运行时的范围
+- 依赖 `@deepseek-ai/cordis` 4.0.5 与 `dsh-client-ui-renderer` 0.2.1-rc.3
+- 兼容性测试改为按宿主启动前的校验规则验证 `engines.dsh` 与 peer 范围，避免再次锁死单个预发布版本
 
 ### 0.2.0 更新
 
@@ -35,7 +43,7 @@
 
 ### 准备条件
 
-- DSH **0.2.0-rc.2**
+- DSH **0.2.1-rc.3**
 - 本地安装 `kubectl`，并确保启动 DSH 的用户可以从 `PATH` 找到它
 - 可用的 kubeconfig，以及查看目标资源的 Kubernetes 权限
 - 从源码构建时需要 Node.js **24 或以上**和 npm
@@ -57,7 +65,7 @@ npm run build
 
 ### Web：直接从 GitHub 安装
 
-确认 `dsh` CLI 本身使用兼容的 0.2.0-rc.2 运行时，然后安装：
+确认 `dsh` CLI 本身使用兼容的 0.2.1-rc.3 运行时，然后安装：
 
 ```bash
 dsh plugin --profile web add github:MrYangyt/dsh-k8s
@@ -252,9 +260,19 @@ dsh-k8s-manager/
 
 插件尚未在 `~/.kube/configs/` 找到配置。点击 **管理集群**，粘贴有效的 kubeconfig YAML，然后点击 **保存集群**。已有主配置不会自动导入。
 
+### 添加集群时报 operation not permitted
+
+若保存集群时出现 `rename-context failed: error: open ~/.kube/configs/<名称>.yaml.lock: operation not permitted`，说明 `kubectl` 被 DSH 的文件沙箱限制在工作区内，无法在 `~/.kube` 下创建锁文件和缓存。
+
+插件通过 `shell.execute()` 的 `sandboxPolicy` 为 kubectl 申请 `~/.kube` 作为可写根目录，授权范围仅限该目录。旧版本没有这项申请，因此会出现上述错误；更新到当前版本并重启 DSH 即可。
+
+宿主在启动时加载插件代码，改动后需要**重启 DeepSeek Harness**，仅刷新页面不会让宿主侧生效。
+
 ### 安装提示与 DSH 不兼容
 
-本版插件要求 DSH 0.2.0-rc.2 的 shell、subprocess 和 webserver SDK。如果错误仍显示 `dsh-k8s-manager@0.1.0` 或要求 `@deepseek-ai/dsh-settings ^0.1.0-rc.8`，说明加载的是旧版本；更新项目、重新构建并重新安装项目目录，再重启 DSH。
+本版插件要求 DSH 0.2.1-rc.3 的 shell、subprocess 和 webserver SDK。如果错误仍显示 `dsh-k8s-manager@0.1.0` 或要求 `@deepseek-ai/dsh-settings ^0.1.0-rc.8`，说明加载的是旧版本；更新项目、重新构建并重新安装项目目录，再重启 DSH。
+
+如果启动日志出现 `disabling profile plugin "k8s-manager"` 并附带 `is incompatible with dsh …`，说明插件声明的 `engines.dsh` 或 DSH peer 范围不接受当前运行时。请安装与当前 DSH 版本匹配的插件版本；不在确有把握时使用版本豁免，跨预发布版本的豁免可能导致崩溃或数据丢失。
 
 ### 安装提示 minimumReleaseAge 或供应链策略失败
 

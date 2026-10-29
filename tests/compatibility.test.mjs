@@ -1,10 +1,16 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import { Readable } from 'node:stream'
+import { mkdtempSync, readFileSync, readdirSync, rmSync } from 'node:fs'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
+import { satisfies } from 'semver'
 import { apply } from '../lib/index.js'
 import manifest from '../package.json' with { type: 'json' }
 
-function harness(stdoutForCommand = () => '/usr/bin/kubectl\n') {
+// `home` points the plugin at a throwaway ~/.kube so a test can exercise the
+// kubeconfig routes without touching the real one.
+function harness(stdoutForCommand = () => '/usr/bin/kubectl\n', options = {}) {
   const routes = new Map()
   const upgrades = new Map()
   const effects = []
@@ -40,7 +46,14 @@ function harness(stdoutForCommand = () => '/usr/bin/kubectl\n') {
     get: key => ({ shell, webServer, subprocess: {} })[key],
     effect: fn => { const dispose = fn(); effects.push(dispose); return dispose },
   }
-  apply(ctx)
+  // The plugin resolves ~/.kube once, at apply time.
+  const previousHome = process.env.HOME
+  if (options.home !== undefined) process.env.HOME = options.home
+  try {
+    apply(ctx)
+  } finally {
+    if (options.home !== undefined) process.env.HOME = previousHome
+  }
   return {
     routes, upgrades, executions,
     dispose: () => effects.reverse().forEach(dispose => dispose()),
@@ -55,12 +68,42 @@ function harness(stdoutForCommand = () => '/usr/bin/kubectl\n') {
   }
 }
 
-test('manifest targets rc.2 and the replacement client renderer', () => {
-  assert.equal(manifest.peerDependencies['@deepseek-ai/dsh-shell'], '0.2.0-rc.2')
-  assert.equal(manifest.peerDependencies['@deepseek-ai/dsh-subprocess'], '0.2.0-rc.2')
+const DSH_RUNTIME = '0.2.1-rc.3'
+
+// A minimal kubeconfig: the plugin only needs the apiVersion/kind fields to
+// accept it, and the injected context name comes from the mocked kubectl.
+const YAML = [
+  'apiVersion: v1',
+  'kind: Config',
+  'clusters: []',
+  'contexts: []',
+  'users: []',
+  '',
+].join('\n')
+
+test('manifest targets the rc.3 host SDK and the replacement client renderer', () => {
+  assert.equal(manifest.engines.dsh, '>=0.2.1-rc.3 <0.3.0')
+  assert.equal(manifest.peerDependencies['@deepseek-ai/dsh-shell'], '^0.2.1-rc.3')
+  assert.equal(manifest.peerDependencies['@deepseek-ai/dsh-subprocess'], '^0.2.1-rc.3')
+  assert.equal(manifest.peerDependencies['@deepseek-ai/dsh-host-webserver'], '^0.2.1-rc.3')
   assert.equal(manifest.dependencies['node-pty'], undefined)
   assert.deepEqual(manifest.dsh.client.inject, ['@deepseek-ai/dsh-client-ui-renderer'])
+  assert.equal(manifest.dsh.client.platform, 'web')
   assert.equal(manifest.peerDependencies['@deepseek-ai/dsh-settings'], undefined)
+})
+
+// The profile boot preflight denies a plugin whose dsh requirements the running
+// runtime does not satisfy, so the manifest must satisfy the installed host.
+test('manifest satisfies the rc.3 runtime the way the boot preflight checks it', () => {
+  assert.ok(satisfies(DSH_RUNTIME, manifest.engines.dsh, { includePrerelease: true }))
+
+  // engines.dsh decides alone, but a manifest without it falls back to the DSH
+  // peers, so every peer must also accept the runtime it is installed into.
+  for (const [name, range] of Object.entries(manifest.peerDependencies)) {
+    if (name !== '@deepseek-ai/dsh' && !name.startsWith('@deepseek-ai/dsh-')) continue
+    assert.ok(satisfies(DSH_RUNTIME, range, { includePrerelease: true }), name + ' rejects ' + DSH_RUNTIME)
+  }
+  assert.equal(manifest.peerDependencies['@deepseek-ai/cordis'], '~4.0.5')
 })
 
 test('foreground commands use asynchronous execute().result()', async () => {
@@ -68,6 +111,7 @@ test('foreground commands use asynchronous execute().result()', async () => {
   try {
     assert.equal((await host.call('detect')).kubectl, true)
     assert.equal(host.executions[0].spec.command, 'command -v kubectl')
+    assert.equal(host.executions[0].spec.sandboxPolicy.mode, 'workspace-write')
   } finally { host.dispose() }
   assert.equal(host.routes.size, 0)
   assert.equal(host.upgrades.size, 0)
@@ -124,6 +168,54 @@ new-node     Unknown                    <none>   1m    v1.34.0\n`
       { name: 'new-node', namespace: '', created: '', ready: false },
     ])
   } finally { host.dispose() }
+})
+
+
+// The host confines subprocess writes to the session workspace, so kubectl's
+// lock files and cache under ~/.kube are denied until the plugin names that
+// tree as its writable root. Saving a cluster renames a context, which is the
+// write that used to fail with `operation not permitted`.
+test('saving a cluster grants kubectl write access under ~/.kube', async () => {
+  const home = mkdtempSync(join(tmpdir(), 'dsh-k8s-home-'))
+  const host = harness(command => command.includes('get-contexts') ? 'in-cluster\n' : '', { home })
+  try {
+    const result = await host.call('save-kubeconfig', { name: 'demo', yaml: YAML })
+
+    assert.equal(result.ok, true)
+    assert.equal(result.name, 'demo')
+    assert.equal(readFileSync(join(home, '.kube', 'configs', 'demo.yaml'), 'utf8'), YAML)
+
+    const rename = host.executions.find(({ spec }) => spec.command.includes('rename-context'))
+    assert.ok(rename, 'saving renames the provider context to the cluster name')
+
+    // Every kubectl call carries the grant, because the executor defaults an
+    // absent policy to the confined mode that just denied this write.
+    for (const { spec } of host.executions) {
+      assert.deepEqual(spec.sandboxPolicy, {
+        mode: 'workspace-write',
+        workspaceRoot: join(home, '.kube'),
+      }, spec.command)
+    }
+  } finally {
+    host.dispose()
+    rmSync(home, { recursive: true, force: true })
+  }
+})
+
+test('deleting a cluster rewrites the merged config through the same grant', async () => {
+  const home = mkdtempSync(join(tmpdir(), 'dsh-k8s-home-'))
+  const host = harness(() => '', { home })
+  try {
+    assert.equal((await host.call('save-kubeconfig', { name: 'demo', yaml: YAML })).ok, true)
+    assert.deepEqual(readdirSync(join(home, '.kube', 'configs')), ['demo.yaml'])
+
+    assert.equal((await host.call('delete-kubeconfig', { name: 'demo.yaml' })).ok, true)
+    assert.deepEqual(readdirSync(join(home, '.kube', 'configs')), [])
+    assert.equal(readFileSync(join(home, '.kube', 'config'), 'utf8'), '')
+  } finally {
+    host.dispose()
+    rmSync(home, { recursive: true, force: true })
+  }
 })
 
 test('log follow has no expiry, supports polling and stops on unload', async () => {

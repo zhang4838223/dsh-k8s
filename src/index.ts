@@ -3,7 +3,7 @@ import path from 'node:path'
 import os from 'node:os'
 import { WebSocket, WebSocketServer } from 'ws'
 import type { Context } from '@deepseek-ai/cordis'
-import type { ShellExecutor, ShellProcess, ShellRunResult } from '@deepseek-ai/dsh-shell'
+import type { ShellExecRequest, ShellExecutor, ShellProcess, ShellRunResult } from '@deepseek-ai/dsh-shell'
 import type { WebRoute } from '@deepseek-ai/dsh-host-webserver'
 import type {} from '@deepseek-ai/dsh-subprocess'
 import { connectTerminal } from './terminal.js'
@@ -22,6 +22,10 @@ function shellService(executor: ShellExecutor) {
 }
 
 type ShellService = ReturnType<typeof shellService>
+
+// kubectl writes its kubeconfig lock files and discovery cache under ~/.kube,
+// which sits outside the session workspace the host sandbox allows by default.
+type SandboxPolicy = NonNullable<ShellExecRequest['sandboxPolicy']>
 
 const KINDS: Record<string, { ns: boolean }> = {
   pods: { ns: true }, deployments: { ns: true }, statefulsets: { ns: true },
@@ -51,15 +55,25 @@ function lastErr(r: ShellRunResult): string {
 }
 
 class K8sService {
-  constructor(private shellSvc: ShellService, private configsDir: string) {}
+  constructor(private shellSvc: ShellService, private configsDir: string, private sandboxPolicy: SandboxPolicy) {}
 
   private kubeconfigPath(clusterName: string): string {
     return path.join(this.configsDir, `${clusterName}.yaml`)
   }
 
+  /**
+   * Resolve a request under the kubeconfig write grant. Every kubectl call needs
+   * it: reading a kubeconfig is ordinary IO, but renaming a context, merging
+   * configs, applying a manifest, or merely caching discovery results all write
+   * beside the config, and a confined run reports those as EPERM.
+   */
+  resolve(request: ShellExecRequest) {
+    return this.shellSvc.resolve({ ...request, sandboxPolicy: this.sandboxPolicy })
+  }
+
   private async run(command: string, clusterName: string, timeoutMs?: number, maxBytes?: number): Promise<ShellRunResult> {
     const kubeconfig = this.kubeconfigPath(clusterName)
-    const spec = this.shellSvc.resolve({
+    const spec = this.resolve({
       command: `KUBECONFIG=${shq(kubeconfig)} ${command}`,
       timeoutMs: timeoutMs || 20000,
       stdoutMaxBytes: maxBytes || 8 * 1024 * 1024,
@@ -68,7 +82,7 @@ class K8sService {
   }
 
   private async runRaw(command: string, timeoutMs?: number, maxBytes?: number): Promise<ShellRunResult> {
-    const spec = this.shellSvc.resolve({
+    const spec = this.resolve({
       command,
       timeoutMs: timeoutMs || 20000,
       stdoutMaxBytes: maxBytes || 8 * 1024 * 1024,
@@ -223,7 +237,7 @@ class K8sService {
     if (container !== undefined && container !== '' && !isName(container)) return fail('invalid container')
     let cmd = 'kubectl logs ' + shq(pod) + ' -n ' + shq(namespace) + ' --tail=300 -f'
     if (container) cmd += ' -c ' + shq(container)
-    const spec = this.shellSvc.resolve({
+    const spec = this.resolve({
       command: `KUBECONFIG=${shq(this.kubeconfigPath(clusterName))} ${cmd}`,
       stdoutMaxBytes: 2 * 1024 * 1024,
       onExpiry: 'none',
@@ -307,6 +321,14 @@ export function apply(ctx: Context) {
   const configsDir = path.join(kubeDir, 'configs')
   const mergedPath = path.join(kubeDir, 'config')
 
+  // The host sandboxes subprocess writes to the session workspace, so kubectl
+  // cannot create its lock files or cache under ~/.kube until we name that tree
+  // as this plugin's writable root. The grant is scoped to ~/.kube: kubectl
+  // still cannot write anywhere else, and the plugin keeps no wider access.
+  const kubeSandbox: SandboxPolicy = { mode: 'workspace-write', workspaceRoot: kubeDir }
+
+  const k8s = new K8sService(shell, configsDir, kubeSandbox)
+
   function listConfigFiles(): string[] {
     try {
       if (!fs.existsSync(configsDir)) return []
@@ -327,7 +349,7 @@ export function apply(ctx: Context) {
         return { ok: true }
       }
       const kubeconfig = files.map((f) => path.join(configsDir, f)).join(':')
-      const r = await shell.run(shell.resolve({
+      const r = await shell.run(k8s.resolve({
         command: `KUBECONFIG=${shq(kubeconfig)} kubectl config view --flatten > ${shq(mergedPath)}`,
         timeoutMs: 15000,
       }))
@@ -337,8 +359,6 @@ export function apply(ctx: Context) {
       return { ok: false, error: e?.message || String(e) }
     }
   }
-
-  const k8s = new K8sService(shell, configsDir)
 
   const logSessions = new Map<string, { proc: ShellProcess }>()
   const terminalSessions = new Map<AbortController, Promise<void>>()
@@ -390,7 +410,7 @@ export function apply(ctx: Context) {
           fs.writeFileSync(filePath, yaml, { mode: 0o600 })
           // Some providers (e.g. Tencent TKE) write a current-context that doesn't
           // exist in contexts[]. Read the first real context name and rename it.
-          const ctxListR = await shell.run(shell.resolve({
+          const ctxListR = await shell.run(k8s.resolve({
             command: `KUBECONFIG=${shq(filePath)} kubectl config get-contexts -o name`,
             timeoutMs: 10000,
           }))
@@ -399,7 +419,7 @@ export function apply(ctx: Context) {
             if (realCtx) {
               let finalCtx = realCtx
               if (realCtx !== safeName) {
-                const renameR = await shell.run(shell.resolve({
+                const renameR = await shell.run(k8s.resolve({
                   command: `KUBECONFIG=${shq(filePath)} kubectl config rename-context ${shq(realCtx)} ${shq(safeName)}`,
                   timeoutMs: 10000,
                 }))
@@ -408,7 +428,7 @@ export function apply(ctx: Context) {
                 }
                 finalCtx = safeName
               }
-              await shell.run(shell.resolve({
+              await shell.run(k8s.resolve({
                 command: `KUBECONFIG=${shq(filePath)} kubectl config use-context ${shq(finalCtx)}`,
                 timeoutMs: 10000,
               }))
